@@ -1,0 +1,57 @@
+stages:
+  - build
+  - docker-build
+  - write-kustomize
+
+
+variables:
+  VERSION: "latest"
+
+build-job:
+  stage: build
+  image: node
+  script:
+    - npm install
+    - npm run build
+  artifacts:
+    paths:
+      - "build/"
+
+build-image:
+  stage: docker-build
+  image: docker:24.0.5  
+  dependencies:
+    - build-job        # Only fetch artifacts from `build-job`
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - VERSION=$(cat VERSION) 
+    # - VERSION=$(git describe --tags --abbrev=0)
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - docker build -t $CI_REGISTRY/ggtulga/test:$VERSION .
+    - docker push $CI_REGISTRY/ggtulga/test:$VERSION
+
+manifest:
+  stage: write-kustomize
+  image: alpine:latest
+  dependencies:
+    - build-image
+
+  before_script:
+    - VERSION=$(cat VERSION)
+    - apk add --no-cache git curl bash coreutils
+    - curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+    - mv kustomize /usr/local/bin/
+    - git clone https://${USERNAME}:${MANIFEST_TOKEN}@gitlab.com/ggtulga/test-manifest.git
+    - cd test-manifest/
+    - git remote set-url origin https://${USERNAME}:${MANIFEST_TOKEN}@gitlab.com/ggtulga/test-manifest.git
+    - git config user.name ggtulga
+    - git config user.email ggtulga@gmail.com
+    - git checkout -B main
+    - cd blog/
+  script:
+    - kustomize edit set image registry.gitlab.com/ggtulga/test:$VERSION
+    - git commit -a -m "changed image"
+    - git push origin main
+    
